@@ -1,0 +1,13 @@
+{
+  "name": "mrgitclean",
+  "version": "0.0.1",
+  "description": "cleanup old git branches",
+  "repository": "https://github.com/gfargo/mrgitclean",
+  "author": "gfargo",
+  "license": "MIT",
+  "dependencies": {
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^11.0.1"
+  }
+}
