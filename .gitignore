@@ -158,3 +158,5 @@ dist
 .pnp.*
 
 node_modules
+
+prompts
