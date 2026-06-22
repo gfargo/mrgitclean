@@ -1,5 +1,7 @@
 #!/usr/bin/env zsh
 
+VERSION="dev"
+
 # Color codes
 RED="\e[31m"
 GREEN="\e[32m"
@@ -208,6 +210,10 @@ git_clean_merged_branches() {
         shift
         include_pattern="$1"
       ;;
+      --version)
+        echo "mrgitclean $VERSION"
+        return 0
+      ;;
       --help)
         echo "Usage: mrgitclean [--batch] [--remote] [--dry-run] [--log <file>] [--exclude <pattern>] [--include <pattern>]"
         echo "By default, runs in interactive mode."
@@ -319,3 +325,6 @@ git_clean_merged_branches() {
 }
 
 alias mrgitclean=git_clean_merged_branches
+
+# Run directly when executed as a script (not sourced into a shell)
+[[ "$ZSH_EVAL_CONTEXT" == "toplevel" ]] && git_clean_merged_branches "$@"

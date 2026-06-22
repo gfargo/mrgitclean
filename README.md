@@ -1,6 +1,6 @@
 # MrGitClean 🧹
 
-**MrGitClean** is a CLI tool that helps you clean up merged Git branches effortlessly. Instead of manually hunting for merged branches, MrGitClean does the work of listing, confirming, and optionally deleting them. It’s interactive by default, safe to use, and easily configurable with various modes and flags.
+**MrGitClean** is a CLI tool that helps you clean up merged Git branches effortlessly. Instead of manually hunting for merged branches, MrGitClean does the work of listing, confirming, and optionally deleting them. It's interactive by default, safe to use, and easily configurable with various modes and flags.
 
 ## Features
 
@@ -9,23 +9,24 @@
 - **Remote Deletions:** With `--remote`, also delete remote branches (always asks for confirmation).
 - **Dry Run:** Test with `--dry-run` to see what would be deleted before actually removing anything.
 - **Logging & Filtering:** Log deleted branches with `--log` and limit the cleanup scope using `--include` and `--exclude` patterns.
-- **Contextual Info:** Displays the last commit time (including a friendly “X units ago” readout) and the merge commit hash for informed decision-making.
+- **Contextual Info:** Displays the last commit time (including a friendly "X units ago" readout) and the merge commit hash for informed decision-making.
 
 ## Installation
 
-<!-- 
-NOTE: note currently available via Homebrew. Uncomment this section when it is.
+### Via Homebrew (Beta)
 
-### Via Homebrew (Recommended)
-
-If you’re on macOS or Linux, you can install MrGitClean via Homebrew:
+> **Note:** MrGitClean is currently available as a beta release (`v1.0.0-beta.x`). Stable releases will follow once the beta channel matures.
 
 ```bash
-brew tap gfargo/mrgitclean
+brew tap gfargo/tap
 brew install mrgitclean
 ```
 
-*(Replace `gfargo` with the actual GitHub username or organization hosting the tap.)*
+Or in one step:
+
+```bash
+brew install gfargo/tap/mrgitclean
+```
 
 Once installed, you can run:
 
@@ -33,16 +34,9 @@ Once installed, you can run:
 mrgitclean --help
 ```
 
-For usage details and options. If a man page is included, you can view it by:
-
-```bash
-man mrgitclean
-``` 
--->
-
 ### Manual Installation via `curl`
 
-If Homebrew isn’t an option, you can still install MrGitClean directly:
+If Homebrew isn't an option, you can still install MrGitClean directly:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/gfargo/mrgitclean/main/bin/mrgitclean -o /usr/local/bin/mrgitclean
@@ -91,7 +85,7 @@ Shows what would be deleted without performing any deletions.
 
 - A new GitHub release is created.
 - The `CHANGELOG.md` is automatically updated.
-- Homebrew formula updates can be integrated into the CI workflow so that the tool’s Homebrew tap is always current.
+- The Homebrew formula in [gfargo/homebrew-tap](https://github.com/gfargo/homebrew-tap) is automatically updated so `brew upgrade mrgitclean` always gets the latest beta.
 
 ## Contributing
 
