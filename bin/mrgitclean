@@ -36,21 +36,98 @@ get_default_branch() {
   echo "$default_branch"
 }
 
-# Helper: Get merged branches into the default branch
-get_merged_branches() {
-  local default_branch="$1"
-  git branch --merged "origin/$default_branch" \
-    | sed 's/^\*//; s/^[[:space:]]*//; s/[[:space:]]*$//' \
-    | grep -v "^$default_branch$"  # exclude the default branch itself
+# Helper: Check if a branch's work is already in the default branch via content equivalence.
+# Detects squash-merged and rebase-merged branches that git branch --merged cannot find.
+# branch_ref can be a local branch name or a remote tracking ref (e.g. origin/branch-name).
+is_merged_by_content() {
+  local default_branch="$1" branch_ref="$2"
+  local base tree synthetic
+
+  base=$(git merge-base "origin/$default_branch" "$branch_ref" 2>/dev/null) || return 1
+  tree=$(git rev-parse "${branch_ref}^{tree}" 2>/dev/null) || return 1
+  synthetic=$(git commit-tree "$tree" -p "$base" -m _) 2>/dev/null || return 1
+
+  # Primary: collapse branch to a single squash commit and test if that patch is already
+  # in the default branch — reliable for squash-merges (the dominant GitHub workflow).
+  if [[ "$(git cherry "origin/$default_branch" "$synthetic" 2>/dev/null)" == "-"* ]]; then
+    return 0
+  fi
+
+  # Fallback: per-commit cherry-pick equivalence — catches multi-commit rebase-merges.
+  # Returns true only when every commit on the branch is already applied (no "+" lines).
+  local cherry_out
+  cherry_out=$(git cherry "origin/$default_branch" "$branch_ref" 2>/dev/null)
+  [[ -z "$cherry_out" ]] && return 1
+  ! printf '%s\n' "$cherry_out" | grep -q "^+"
 }
 
-# Helper: Filter branches according to skip, exclude, and include patterns
+# Helper: Get merged branches into the default branch.
+# Outputs local branch names as-is; remote-only branches are prefixed with "remote::".
+# Pass remote_mode=true to also enumerate remote-only merged branches.
+get_merged_branches() {
+  local default_branch="$1"
+  local remote_mode="${2:-false}"
+
+  # Phase 1: ancestry-merged local branches (fast path for merge-commit/FF merges)
+  local ancestry_merged=()
+  while IFS= read -r b; do
+    [[ -n "$b" ]] && ancestry_merged+=("$b")
+  done < <(git branch --merged "origin/$default_branch" \
+    | sed 's/^\*//; s/^[[:space:]]*//; s/[[:space:]]*$//' \
+    | grep -v "^$default_branch$")
+
+  [[ ${#ancestry_merged[@]} -gt 0 ]] && printf '%s\n' "${ancestry_merged[@]}"
+
+  # Phase 2: content-check remaining local branches (detects squash/rebase merges)
+  while IFS= read -r b; do
+    [[ -z "$b" ]] && continue
+    [[ " ${ancestry_merged[*]} " == *" $b "* ]] && continue
+    is_merged_by_content "$default_branch" "$b" && echo "$b"
+  done < <(git for-each-ref --format='%(refname:short)' refs/heads \
+    | grep -v "^$default_branch$")
+
+  # Phase 3: remote-only merged branches (only when --remote mode is active)
+  if [[ "$remote_mode" == "true" ]]; then
+    local all_local
+    all_local=$(git for-each-ref --format='%(refname:short)' refs/heads)
+
+    # Ancestry-merged remote-only branches
+    local ancestry_remote=()
+    while IFS= read -r remote_ref; do
+      [[ -z "$remote_ref" ]] && continue
+      local b="${remote_ref#origin/}"
+      [[ "$b" == "HEAD" || "$b" == "$default_branch" ]] && continue
+      grep -qx "$b" <<< "$all_local" && continue
+      ancestry_remote+=("$b")
+      echo "remote::$b"
+    done < <(git branch -r --merged "origin/$default_branch" \
+      | sed 's/^[[:space:]]*//' \
+      | grep -v "^origin/HEAD" \
+      | grep "^origin/")
+
+    # Content-check remaining remote-only branches (squash/rebase-merged, no local copy)
+    while IFS= read -r remote_ref; do
+      [[ -z "$remote_ref" ]] && continue
+      local b="${remote_ref#origin/}"
+      [[ "$b" == "HEAD" || "$b" == "$default_branch" ]] && continue
+      grep -qx "$b" <<< "$all_local" && continue
+      [[ " ${ancestry_remote[*]} " == *" $b "* ]] && continue
+      is_merged_by_content "$default_branch" "origin/$b" && echo "remote::$b"
+    done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
+      | grep -v "^origin/HEAD$" \
+      | grep -v "^origin/${default_branch}$")
+  fi
+}
+
+# Helper: Filter branches according to skip, exclude, and include patterns.
+# Handles both plain local branch names and "remote::<name>" remote-only entries.
 filter_branches() {
   local branches=("$@")
   local filtered=()
 
-  for b in "${branches[@]}"; do
-    [[ -z "$b" ]] && continue
+  for entry in "${branches[@]}"; do
+    [[ -z "$entry" ]] && continue
+    local b="${entry#remote::}"
     if [[ " ${DEFAULT_SKIP_BRANCHES[@]} " =~ " $b " ]]; then
       continue
     fi
@@ -60,7 +137,7 @@ filter_branches() {
     if [[ -n "$include_pattern" && "$b" != $include_pattern ]]; then
       continue
     fi
-    filtered+=("$b")
+    filtered+=("$entry")
   done
 
   echo "${filtered[@]}"
@@ -176,10 +253,13 @@ delete_local_branch() {
   fi
 }
 
-# Helper: Delete remote branch
+# Helper: Delete remote branch; returns non-zero and warns on failure
 delete_remote_branch() {
   local branch="$1"
-  git push origin --delete "$branch" &>/dev/null || warn_msg "Remote branch '$branch' not found or could not be deleted."
+  if ! git push origin --delete "$branch" &>/dev/null; then
+    warn_msg "Remote branch '$branch' not found or could not be deleted."
+    return 1
+  fi
 }
 
 git_clean_merged_branches() {
@@ -249,9 +329,9 @@ git_clean_merged_branches() {
   # Fetch updates
   git fetch origin &>/dev/null
 
-  # Get merged branches
+  # Get merged branches (including squash/rebase-merged and remote-only when --remote)
   local merged
-  merged=($(get_merged_branches "$default_branch"))
+  merged=($(get_merged_branches "$default_branch" "$remote"))
 
   # Filter branches
   local branch_list
@@ -265,12 +345,23 @@ git_clean_merged_branches() {
   info_msg "Default branch is: $default_branch"
   info_msg "Found ${#branch_list[@]} merged branches eligible for cleanup."
 
-  for b in "${branch_list[@]}"; do
+  for entry in "${branch_list[@]}"; do
+    local is_remote_only=false
+    local b="$entry"
+    if [[ "$entry" == remote::* ]]; then
+      is_remote_only=true
+      b="${entry#remote::}"
+    fi
+
+    # For remote-only branches, use the remote tracking ref for git queries
+    local git_ref="$b"
+    $is_remote_only && git_ref="origin/$b"
+
     local last_commit_info
-    last_commit_info=$(get_branch_last_commit_info "$b")
+    last_commit_info=$(get_branch_last_commit_info "$git_ref")
 
     local merge_commit
-    merge_commit=$(get_merge_commit_hash "$default_branch" "$b")
+    merge_commit=$(get_merge_commit_hash "$default_branch" "$git_ref")
 
     local should_delete=true
     # Always prompt if interactive or remote requested.
@@ -288,21 +379,24 @@ git_clean_merged_branches() {
         info_msg "[DRY-RUN] Would delete: $b"
         echo
       else
-        delete_local_branch "$b"
-        info_msg "Deleted local branch '$b'"
-        [[ -n "$log_file" ]] && echo "$b" >> "$log_file"
-        echo
+        if ! $is_remote_only; then
+          delete_local_branch "$b"
+          info_msg "Deleted local branch '$b'"
+          [[ -n "$log_file" ]] && echo "$b" >> "$log_file"
+          echo
+        fi
       fi
 
-      if $remote; then
+      if $remote || $is_remote_only; then
         # Even in batch mode, remote deletion prompts again for safety if not interactive.
         if $batch_mode && ! $interactive && ! $dry_run; then
           warn_msg "You chose remote deletion in batch mode. Confirm again to delete remote '$b': [y/N]"
           read -r confirm2
           if [[ "$confirm2" =~ ^[Yy]$ ]]; then
-            delete_remote_branch "$b"
-            info_msg "Deleted remote branch '$b'"
-            [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
+            if delete_remote_branch "$b"; then
+              info_msg "Deleted remote branch '$b'"
+              [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
+            fi
           else
             info_msg "Skipped remote deletion for '$b'"
           fi
@@ -313,9 +407,10 @@ git_clean_merged_branches() {
         else
           # Interactive mode already got user confirmation
           if $interactive; then
-            delete_remote_branch "$b"
-            info_msg "Deleted remote branch '$b'"
-            [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
+            if delete_remote_branch "$b"; then
+              info_msg "Deleted remote branch '$b'"
+              [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
+            fi
             echo
           fi
         fi
