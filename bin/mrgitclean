@@ -45,7 +45,7 @@ is_merged_by_content() {
 
   base=$(git merge-base "origin/$default_branch" "$branch_ref" 2>/dev/null) || return 1
   tree=$(git rev-parse "${branch_ref}^{tree}" 2>/dev/null) || return 1
-  synthetic=$(git commit-tree "$tree" -p "$base" -m _) 2>/dev/null || return 1
+  synthetic=$(git commit-tree "$tree" -p "$base" -m _ 2>/dev/null) || return 1
 
   # Primary: collapse branch to a single squash commit and test if that patch is already
   # in the default branch — reliable for squash-merges (the dominant GitHub workflow).
@@ -82,7 +82,7 @@ get_merged_branches() {
   while IFS= read -r b; do
     [[ -z "$b" ]] && continue
     [[ " ${ancestry_merged[*]} " == *" $b "* ]] && continue
-    is_merged_by_content "$default_branch" "$b" && echo "$b"
+    is_merged_by_content "$default_branch" "$b" && echo "content::$b"
   done < <(git for-each-ref --format='%(refname:short)' refs/heads \
     | grep -v "^$default_branch$")
 
@@ -112,7 +112,7 @@ get_merged_branches() {
       [[ "$b" == "HEAD" || "$b" == "$default_branch" ]] && continue
       grep -qx "$b" <<< "$all_local" && continue
       [[ " ${ancestry_remote[*]} " == *" $b "* ]] && continue
-      is_merged_by_content "$default_branch" "origin/$b" && echo "remote::$b"
+      is_merged_by_content "$default_branch" "origin/$b" && echo "remote::content::$b"
     done < <(git for-each-ref --format='%(refname:short)' refs/remotes/origin \
       | grep -v "^origin/HEAD$" \
       | grep -v "^origin/${default_branch}$")
@@ -128,6 +128,7 @@ filter_branches() {
   for entry in "${branches[@]}"; do
     [[ -z "$entry" ]] && continue
     local b="${entry#remote::}"
+    b="${b#content::}"
     if [[ " ${DEFAULT_SKIP_BRANCHES[@]} " =~ " $b " ]]; then
       continue
     fi
@@ -347,10 +348,15 @@ git_clean_merged_branches() {
 
   for entry in "${branch_list[@]}"; do
     local is_remote_only=false
+    local is_content_detected=false
     local b="$entry"
-    if [[ "$entry" == remote::* ]]; then
+    if [[ "$b" == remote::* ]]; then
       is_remote_only=true
-      b="${entry#remote::}"
+      b="${b#remote::}"
+    fi
+    if [[ "$b" == content::* ]]; then
+      is_content_detected=true
+      b="${b#content::}"
     fi
 
     # For remote-only branches, use the remote tracking ref for git queries
@@ -365,8 +371,9 @@ git_clean_merged_branches() {
 
     local should_delete=true
     # Always prompt if interactive or remote requested.
-    # If batch_mode for local only, no prompt needed (unless remote).
-    if $interactive || $remote; then
+    # Also prompt for content-detected (heuristic) branches in batch mode: they require
+    # force-delete and a false positive is unrecoverable without confirmation.
+    if $interactive || $remote || ($is_content_detected && $batch_mode); then
       if ! prompt_for_deletion "$b" "$remote" "$last_commit_info" "$merge_commit"; then
         info_msg "Skipped '$b'"
         should_delete=false
