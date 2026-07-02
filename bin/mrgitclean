@@ -129,7 +129,7 @@ filter_branches() {
     [[ -z "$entry" ]] && continue
     local b="${entry#remote::}"
     b="${b#content::}"
-    if [[ " ${DEFAULT_SKIP_BRANCHES[@]} " =~ " $b " ]]; then
+    if [[ " ${DEFAULT_SKIP_BRANCHES[*]} " == *" $b "* ]]; then
       continue
     fi
     if [[ -n "$exclude_pattern" && "$b" == $exclude_pattern ]]; then
