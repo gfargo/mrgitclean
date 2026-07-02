@@ -132,11 +132,20 @@ filter_branches() {
     if [[ " ${DEFAULT_SKIP_BRANCHES[@]} " =~ " $b " ]]; then
       continue
     fi
-    if [[ -n "$exclude_pattern" && "$b" == $exclude_pattern ]]; then
-      continue
-    fi
-    if [[ -n "$include_pattern" && "$b" != $include_pattern ]]; then
-      continue
+    # exclude: skip if b matches any exclude glob
+    local skip=false pat
+    for pat in "${exclude_patterns[@]}"; do
+      [[ "$b" == $pat ]] && { skip=true; break; }
+    done
+    $skip && continue
+
+    # include: if any include patterns given, keep only matches
+    if [[ ${#include_patterns[@]} -gt 0 ]]; then
+      local keep=false
+      for pat in "${include_patterns[@]}"; do
+        [[ "$b" == $pat ]] && { keep=true; break; }
+      done
+      $keep || continue
     fi
     filtered+=("$entry")
   done
@@ -269,8 +278,8 @@ git_clean_merged_branches() {
   local remote=false
   local dry_run=false
   local log_file=""
-  include_pattern=""
-  exclude_pattern=""
+  include_patterns=()
+  exclude_patterns=()
   local batch_mode=false
 
   # Parse flags
@@ -285,11 +294,11 @@ git_clean_merged_branches() {
       ;;
       --exclude)
         shift
-        exclude_pattern="$1"
+        exclude_patterns+=("$1")
       ;;
       --include)
         shift
-        include_pattern="$1"
+        include_patterns+=("$1")
       ;;
       --version)
         echo "mrgitclean $VERSION"
@@ -302,8 +311,12 @@ git_clean_merged_branches() {
         echo "--remote: Also attempt to delete remote branches (always prompts)."
         echo "--dry-run: Show what would be deleted without deleting."
         echo "--log <file>: Log deleted branches to a file."
-        echo "--exclude <pattern>: Exclude branches matching this pattern."
-        echo "--include <pattern>: Only include branches matching this pattern."
+        echo "--exclude <glob>: Exclude branches matching this shell glob (e.g. 'feat/*'). Repeatable."
+        echo "--include <glob>: Only include branches matching this shell glob (e.g. 'release/*'). Repeatable."
+        echo "  Matching uses shell glob patterns, not substring. '--exclude feat' matches only a branch"
+        echo "  literally named 'feat'; use 'feat/*' to match all branches with a 'feat/' prefix."
+        echo "  When multiple --exclude/--include flags are given, a branch is excluded/included if it"
+        echo "  matches ANY of the provided globs (OR logic). Exclude takes precedence over include."
         return 0
       ;;
       *)
