@@ -8,6 +8,7 @@
 - **Batch Mode:** Use `--batch` to run non-interactively, ideal for large-scale cleanups.
 - **Remote Deletions:** With `--remote`, also delete remote branches (always asks for confirmation).
 - **Dry Run:** Test with `--dry-run` to see what would be deleted before actually removing anything.
+- **Force Delete:** Use `--force` to allow force-deletion (`-D`) of branches git considers unmerged (e.g. after a squash or rebase merge that bypassed git's ancestry check). Without this flag, such branches are warned and skipped rather than silently deleted.
 - **Logging & Filtering:** Log deleted branches with `--log` and limit the cleanup scope using `--include` and `--exclude` patterns.
 - **Contextual Info:** Displays the last commit time (including a friendly "X units ago" readout) and the merge commit hash for informed decision-making.
 
@@ -78,6 +79,14 @@ mrgitclean --dry-run
 ```
 
 Shows what would be deleted without performing any deletions.
+
+**Force Delete (squash/rebase-merged or otherwise unmerged per git):**
+
+```bash
+mrgitclean --force
+```
+
+Allows force-deletion (`-D`) of branches that `git branch -d` refuses. Without `--force`, those branches are warned and skipped. Note: branches detected as squash- or rebase-merged via content analysis are always force-deleted automatically, since git's ancestry check cannot see those merges.
 
 ## Releases & Changelog
 

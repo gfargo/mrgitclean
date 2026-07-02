@@ -247,11 +247,22 @@ prompt_for_deletion() {
 }
 
 # Helper: Delete local branch
+# $1 = branch name
+# $2 = allow_force (true/false); when true, escalates to -D if -d refuses
+# Returns 0 on deletion, 1 on skip.
 delete_local_branch() {
   local branch="$1"
-  if ! git branch -d "$branch" &>/dev/null; then
-    git branch -D "$branch" &>/dev/null
+  local allow_force="${2:-false}"
+  if git branch -d "$branch" &>/dev/null; then
+    return 0
   fi
+  if [[ "$allow_force" == true ]]; then
+    warn_msg "Branch '$branch' is not ancestry-merged; force-deleting (-D)."
+    git branch -D "$branch" &>/dev/null
+    return $?
+  fi
+  warn_msg "Branch '$branch' is not merged per git; skipping. Use --force to delete anyway."
+  return 1
 }
 
 # Helper: Delete remote branch; returns non-zero and warns on failure
@@ -272,6 +283,7 @@ git_clean_merged_branches() {
   include_pattern=""
   exclude_pattern=""
   local batch_mode=false
+  local force=false
 
   # Parse flags
   while [[ "$#" -gt 0 ]]; do
@@ -279,6 +291,7 @@ git_clean_merged_branches() {
       --batch) batch_mode=true; interactive=false ;;
       --remote) remote=true ;;
       --dry-run) dry_run=true ;;
+      --force) force=true ;;
       --log)
         shift
         log_file="$1"
@@ -296,11 +309,12 @@ git_clean_merged_branches() {
         return 0
       ;;
       --help)
-        echo "Usage: mrgitclean [--batch] [--remote] [--dry-run] [--log <file>] [--exclude <pattern>] [--include <pattern>]"
+        echo "Usage: mrgitclean [--batch] [--remote] [--dry-run] [--force] [--log <file>] [--exclude <pattern>] [--include <pattern>]"
         echo "By default, runs in interactive mode."
         echo "--batch: Run in non-interactive mode for local branches."
         echo "--remote: Also attempt to delete remote branches (always prompts)."
         echo "--dry-run: Show what would be deleted without deleting."
+        echo "--force: Force-delete (-D) branches that git branch -d refuses (unmerged per git ancestry)."
         echo "--log <file>: Log deleted branches to a file."
         echo "--exclude <pattern>: Exclude branches matching this pattern."
         echo "--include <pattern>: Only include branches matching this pattern."
@@ -387,9 +401,14 @@ git_clean_merged_branches() {
         echo
       else
         if ! $is_remote_only; then
-          delete_local_branch "$b"
-          info_msg "Deleted local branch '$b'"
-          [[ -n "$log_file" ]] && echo "$b" >> "$log_file"
+          local allow_force=false
+          { $is_content_detected || $force; } && allow_force=true
+          if delete_local_branch "$b" "$allow_force"; then
+            info_msg "Deleted local branch '$b'"
+            [[ -n "$log_file" ]] && echo "$b" >> "$log_file"
+          else
+            info_msg "Skipped local branch '$b'"
+          fi
           echo
         fi
       fi
