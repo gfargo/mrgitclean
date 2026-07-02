@@ -2,14 +2,18 @@
 
 VERSION="dev"
 
-# Color codes
-RED="\e[31m"
-GREEN="\e[32m"
-YELLOW="\e[33m"
-BLUE="\e[34m"
-BOLD="\e[1m"
-DIM="\e[2m"
-RESET="\e[0m"
+# Color codes — only emit ANSI when stdout is a TTY and NO_COLOR is unset
+if [ -t 1 ] && [ -z "$NO_COLOR" ]; then
+  RED="\e[31m"
+  GREEN="\e[32m"
+  YELLOW="\e[33m"
+  BLUE="\e[34m"
+  BOLD="\e[1m"
+  DIM="\e[2m"
+  RESET="\e[0m"
+else
+  RED="" GREEN="" YELLOW="" BLUE="" BOLD="" DIM="" RESET=""
+fi
 
 # Default branches to skip by default unless explicitly included
 DEFAULT_SKIP_BRANCHES=("main" "master" "develop")
@@ -29,11 +33,26 @@ warn_msg() {
   echo -e "${YELLOW}$1${RESET}"
 }
 
-# Helper: Determine the default branch from origin/HEAD
+# Helper: Determine the default branch with multiple fallbacks
 get_default_branch() {
-  local default_branch
-  default_branch=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
-  echo "$default_branch"
+  local branch
+
+  # 1. Try local origin/HEAD ref (fast, no network)
+  branch=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  [[ -n "$branch" && "$branch" != "HEAD" ]] && echo "$branch" && return
+
+  # 2. Ask the remote to update origin/HEAD (tolerates failure)
+  git remote set-head origin -a &>/dev/null
+  branch=$(git rev-parse --abbrev-ref origin/HEAD 2>/dev/null | sed 's|^origin/||')
+  [[ -n "$branch" && "$branch" != "HEAD" ]] && echo "$branch" && return
+
+  # 3. Probe common default branch names
+  for candidate in main master; do
+    if git rev-parse --verify "origin/$candidate" &>/dev/null; then
+      echo "$candidate"
+      return
+    fi
+  done
 }
 
 # Helper: Check if a branch's work is already in the default branch via content equivalence.
@@ -272,6 +291,7 @@ git_clean_merged_branches() {
   include_pattern=""
   exclude_pattern=""
   local batch_mode=false
+  local yes=false
 
   # Parse flags
   while [[ "$#" -gt 0 ]]; do
@@ -280,26 +300,41 @@ git_clean_merged_branches() {
       --remote) remote=true ;;
       --dry-run) dry_run=true ;;
       --log)
+        if [[ -z "$2" || "$2" == -* ]]; then
+          error_msg "--log requires a <file> argument"
+          return 1
+        fi
         shift
         log_file="$1"
       ;;
       --exclude)
+        if [[ -z "$2" || "$2" == -* ]]; then
+          error_msg "--exclude requires a <pattern> argument"
+          return 1
+        fi
         shift
         exclude_pattern="$1"
       ;;
       --include)
+        if [[ -z "$2" || "$2" == -* ]]; then
+          error_msg "--include requires a <pattern> argument"
+          return 1
+        fi
         shift
         include_pattern="$1"
       ;;
+      -y|--yes) yes=true; batch_mode=true; interactive=false ;;
       --version)
         echo "mrgitclean $VERSION"
         return 0
       ;;
       --help)
-        echo "Usage: mrgitclean [--batch] [--remote] [--dry-run] [--log <file>] [--exclude <pattern>] [--include <pattern>]"
+        echo "Usage: mrgitclean [--batch] [-y|--yes] [--remote] [--dry-run] [--log <file>] [--exclude <pattern>] [--include <pattern>]"
         echo "By default, runs in interactive mode."
         echo "--batch: Run in non-interactive mode for local branches."
-        echo "--remote: Also attempt to delete remote branches (always prompts)."
+        echo "-y, --yes: Fully non-interactive; delete all eligible branches without per-branch prompts."
+        echo "           Prints a confirmation summary before deleting. Respects --dry-run."
+        echo "--remote: Also attempt to delete remote branches (always prompts, unless --yes)."
         echo "--dry-run: Show what would be deleted without deleting."
         echo "--log <file>: Log deleted branches to a file."
         echo "--exclude <pattern>: Exclude branches matching this pattern."
@@ -327,8 +362,8 @@ git_clean_merged_branches() {
     return 1
   fi
 
-  # Fetch updates
-  git fetch origin &>/dev/null
+  # Fetch updates and prune stale remote-tracking refs
+  git fetch --prune origin &>/dev/null
 
   # Get merged branches (including squash/rebase-merged and remote-only when --remote)
   local merged
@@ -345,6 +380,24 @@ git_clean_merged_branches() {
 
   info_msg "Default branch is: $default_branch"
   info_msg "Found ${#branch_list[@]} merged branches eligible for cleanup."
+
+  echo -e "\n${BOLD}Branches to be cleaned up:${RESET}"
+  for entry in "${branch_list[@]}"; do
+    local label_b="${entry#remote::}"
+    label_b="${label_b#content::}"
+    local kind=""
+    [[ "$entry" == remote::* ]] && kind+=" ${DIM}(remote-only)${RESET}"
+    [[ "$entry" == *content::* ]] && kind+=" ${DIM}(content-detected)${RESET}"
+    echo -e "  ${DIM}•${RESET} $label_b$kind"
+  done
+  echo
+
+  if $yes; then
+    warn_msg "WARNING: --yes flag set. All ${#branch_list[@]} branches will be deleted without per-branch prompts."
+    echo
+  fi
+
+  local deleted_local=0 deleted_remote=0 skipped=0
 
   for entry in "${branch_list[@]}"; do
     local is_remote_only=false
@@ -370,52 +423,66 @@ git_clean_merged_branches() {
     merge_commit=$(get_merge_commit_hash "$default_branch" "$git_ref")
 
     local should_delete=true
-    # Always prompt if interactive or remote requested.
-    # Also prompt for content-detected (heuristic) branches in batch mode: they require
-    # force-delete and a false positive is unrecoverable without confirmation.
-    if $interactive || $remote || ($is_content_detected && $batch_mode); then
+    # Prompt when interactive, remote-enabled, or content-detected in batch mode.
+    # Skip all prompts when --yes is set.
+    if ! $yes && ($interactive || $remote || ($is_content_detected && $batch_mode)); then
       if ! prompt_for_deletion "$b" "$remote" "$last_commit_info" "$merge_commit"; then
         info_msg "Skipped '$b'"
         should_delete=false
+        (( skipped++ ))
         echo
       fi
     fi
 
     if $should_delete; then
       if $dry_run; then
-        info_msg "[DRY-RUN] Would delete: $b"
-        echo
+        if ! $is_remote_only; then
+          info_msg "[DRY-RUN] Would delete: $b"
+          (( deleted_local++ ))
+          echo
+        fi
       else
         if ! $is_remote_only; then
           delete_local_branch "$b"
           info_msg "Deleted local branch '$b'"
+          (( deleted_local++ ))
           [[ -n "$log_file" ]] && echo "$b" >> "$log_file"
           echo
         fi
       fi
 
       if $remote || $is_remote_only; then
-        # Even in batch mode, remote deletion prompts again for safety if not interactive.
-        if $batch_mode && ! $interactive && ! $dry_run; then
+        if $dry_run; then
+          info_msg "[DRY-RUN] Would delete remote branch '$b'"
+          (( deleted_remote++ ))
+          echo
+        elif $yes; then
+          if delete_remote_branch "$b"; then
+            info_msg "Deleted remote branch '$b'"
+            (( deleted_remote++ ))
+            [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
+          fi
+          echo
+        elif $batch_mode && ! $interactive; then
           warn_msg "You chose remote deletion in batch mode. Confirm again to delete remote '$b': [y/N]"
           read -r confirm2
           if [[ "$confirm2" =~ ^[Yy]$ ]]; then
             if delete_remote_branch "$b"; then
               info_msg "Deleted remote branch '$b'"
+              (( deleted_remote++ ))
               [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
             fi
           else
             info_msg "Skipped remote deletion for '$b'"
+            (( skipped++ ))
           fi
-          echo
-        elif $dry_run; then
-          info_msg "[DRY-RUN] Would delete remote branch '$b'"
           echo
         else
           # Interactive mode already got user confirmation
           if $interactive; then
             if delete_remote_branch "$b"; then
               info_msg "Deleted remote branch '$b'"
+              (( deleted_remote++ ))
               [[ -n "$log_file" ]] && echo "remote:$b" >> "$log_file"
             fi
             echo
@@ -424,9 +491,22 @@ git_clean_merged_branches() {
       fi
     fi
   done
+
+  if $dry_run; then
+    echo -e "${BOLD}[DRY-RUN] Summary:${RESET} Would delete ${deleted_local} local, ${deleted_remote} remote. Skipped: ${skipped}."
+  else
+    echo -e "${BOLD}Done.${RESET} Deleted ${deleted_local} local, ${deleted_remote} remote. Skipped: ${skipped}."
+  fi
 }
 
 alias mrgitclean=git_clean_merged_branches
 
-# Run directly when executed as a script (not sourced into a shell)
-[[ "$ZSH_EVAL_CONTEXT" == "toplevel" ]] && git_clean_merged_branches "$@"
+# Run directly when executed as a script (not sourced into a shell).
+# Emit a clear error when invoked under bash — zsh-specific idioms (1-indexed arrays,
+# ZSH_EVAL_CONTEXT) mean silent failures would occur otherwise.
+if [[ "$ZSH_EVAL_CONTEXT" == "toplevel" ]]; then
+  git_clean_merged_branches "$@"
+elif [[ -z "$ZSH_VERSION" ]]; then
+  echo "Error: mrgitclean requires zsh. Run with: zsh $0" >&2
+  exit 1
+fi

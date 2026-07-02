@@ -6,10 +6,12 @@
 
 - **Interactive by Default:** Prompt before deleting each branch, reducing the risk of accidental removals.
 - **Batch Mode:** Use `--batch` to run non-interactively, ideal for large-scale cleanups.
-- **Remote Deletions:** With `--remote`, also delete remote branches (always asks for confirmation).
+- **Fully Non-Interactive Mode:** Use `-y`/`--yes` to delete all eligible branches in one shot — prints a pre-run summary and final tally, skips all per-branch prompts. Safe to use in CI scripts; combine with `--dry-run` to preview first.
+- **Remote Deletions:** With `--remote`, also delete remote branches (always asks for confirmation, unless `--yes` is set).
 - **Dry Run:** Test with `--dry-run` to see what would be deleted before actually removing anything.
 - **Logging & Filtering:** Log deleted branches with `--log` and limit the cleanup scope using `--include` and `--exclude` patterns.
 - **Contextual Info:** Displays the last commit time (including a friendly "X units ago" readout) and the merge commit hash for informed decision-making.
+- **TTY-aware Color:** ANSI color output is automatically suppressed when stdout is piped or `NO_COLOR` is set, keeping logs and scripts clean.
 
 ## Installation
 
@@ -62,6 +64,18 @@ mrgitclean --batch
 ```
 
 Deletes all eligible local branches without prompting (remote still requires confirmation if `--remote` is used).
+
+**Fully Non-Interactive (CI/Script) Mode:**
+
+```bash
+mrgitclean --yes --remote
+```
+
+Deletes all eligible local and remote branches with zero per-branch prompts. Prints a pre-run summary of all branches to be deleted and a final tally. Always combine with `--dry-run` first to verify:
+
+```bash
+mrgitclean --yes --remote --dry-run
+```
 
 **Also Delete Remote Branches:**
 
